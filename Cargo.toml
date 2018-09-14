@@ -1,0 +1,6 @@
+[package]
+name = "mcp"
+version = "0.1.0"
+authors = ["Chris Heller <hellertime@gmail.com>"]
+
+[dependencies]
