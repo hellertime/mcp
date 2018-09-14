@@ -22,6 +22,42 @@ fn num_cpus() -> usize {
         .len()
 }
 
+// THIS IS JUST A DEMO WE WOULD CARRY OUR ID WITH US
+fn get_cpu() -> usize {
+    format!("{}",Topology::new()
+        .get_cpubind(CPUBIND_THREAD)
+        .unwrap()
+        )
+        .parse::<usize>().unwrap()
+}
+
+fn pin_to_cpu(cpu: usize) {
+    let tid = unsafe { libc::pthread_self() };
+    let mut topo = Topology::new();
+    let cpuset = {
+        let cores = topo.objects_with_type(&ObjectType::Core).unwrap();
+        let mut cpuset = match cores.get(cpu) {
+            Some(val) => val.cpuset().unwrap(),
+            None => panic!("unable to locate core id {}", cpu)
+        };
+        cpuset.singlify();
+        cpuset
+    };
+    topo.set_cpubind_for_thread(tid, cpuset, CPUBIND_THREAD).unwrap();
+}
+
+fn spawn_on_cpu<F, T>(cpu: usize, f: F) -> thread::JoinHandle<T>
+    where
+        F: FnOnce() -> T,
+        F: Send + 'static,
+        T: Send + 'static
+        {
+    thread::spawn(move || {
+        pin_to_cpu(cpu);
+        f()
+    })
+}
+
 fn main() {
     let ncpus = num_cpus();
     let chans : Vec<_> = (0 .. ncpus)
@@ -33,26 +69,14 @@ fn main() {
         .map(|cpu| {
             let r = chans[cpu].1.clone();
             let s : Vec<_> = chans.iter().map(|(s,_)| s.clone()).collect();
-            thread::spawn(move || {
-                let tid = unsafe { libc::pthread_self() };
-                let mut topo = Topology::new();
-                let cpuset = {
-                    let cores = topo.objects_with_type(&ObjectType::Core).unwrap();
-                    let mut cpuset = match cores.get(cpu) {
-                        Some(val) => val.cpuset().unwrap(),
-                        None => panic!("No core found with id {}", cpu)
-                    };
-                    cpuset.singlify();
-                    cpuset
-                };
-                topo.set_cpubind_for_thread(tid, cpuset, CPUBIND_THREAD).unwrap();
-
+            spawn_on_cpu(cpu, move || {
+                let c = get_cpu();
                 match r.recv() {
-                    Some(cpu_from) => println!("Thread {} on cpu {} from {}.", tid, cpu, cpu_from),
+                    Some(cpu_from) => println!("cpu {}({}) from {}.", c, cpu, cpu_from),
                     None => println!("Recieve side closed")
                 }
 
-                s[0].send(cpu);
+                s[0].send(c);
             });
         })
         .collect();
